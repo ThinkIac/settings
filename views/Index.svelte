@@ -5,6 +5,9 @@
   let theme = 'dark';
   let tabs = [];
   let keyTabs = [];
+  let sections = [];
+  let tabSections = [];
+  let tabRequest = 0;
   let active = '';
   let openKeyTab = '';
   let loading = true;
@@ -33,6 +36,7 @@
       if (!response.ok || data.status >= 400) throw new Error(data.error || data.message || 'Could not load settings.');
       tabs = data.tabs || [];
       keyTabs = data.keyTabs || [];
+      sections = data.sections || [];
       const nextActive = tabs.some((tab) => tab.id === active) ? active : tabs[0]?.id || '';
       if (nextActive !== active) await openTab(nextActive);
     } catch (cause) {
@@ -43,24 +47,41 @@
   $: current = tabs.find((tab) => tab.id === active);
 
   async function openTab(id) {
+    const request = ++tabRequest;
     active = id;
     surface = null;
     surfaceState = {};
     surfaceError = '';
+    tabSections = [];
     const tab = tabs.find((entry) => entry.id === id);
-    if (!tab || tab.renderer !== 'schema') return;
+    surfaceLoading = tab?.renderer === 'schema';
+    if (!surfaceLoading) return;
 
-    surfaceLoading = true;
     try {
       const response = await fetch(`/${tab.packageName}/system/view?tab=${encodeURIComponent(tab.id)}`);
       const data = await response.json();
       if (!response.ok || data.status >= 400) throw new Error(data.error || data.message || 'Could not load settings section.');
+      const matchingSections = sections.filter((section) => section.tab === tab.id && section.renderer === 'schema');
+      const loadedSections = await Promise.all(matchingSections.map(async (section) => {
+        try {
+          const response = await fetch(`/${section.packageName}/system/view?tab=${encodeURIComponent(section.id)}`);
+          const payload = await response.json();
+          if (!response.ok || payload.status >= 400 || !payload.surface) {
+            throw new Error(payload.mensagem || payload.error || 'Could not load settings section.');
+          }
+          return { ...section, surface: payload.surface, state: payload.state || {} };
+        } catch (cause) {
+          return { ...section, error: cause.message || 'Could not load settings section.' };
+        }
+      }));
+      if (request !== tabRequest) return;
       surface = data.surface;
       surfaceState = data.state || {};
+      tabSections = loadedSections;
     } catch (cause) {
-      surfaceError = cause.message || 'Could not load settings section.';
+      if (request === tabRequest) surfaceError = cause.message || 'Could not load settings section.';
     } finally {
-      surfaceLoading = false;
+      if (request === tabRequest) surfaceLoading = false;
     }
   }
 
@@ -108,6 +129,12 @@
           <p class="state error" role="alert">{surfaceError}</p>
         {:else if current.renderer === 'schema' && surface}
           <SystemSurface {surface} state={surfaceState} actionUrl={`/${current.packageName}/system/action?tab=${encodeURIComponent(current.id)}`} />
+          {#each tabSections as section (`${section.packageName}:${section.id}`)}
+            <section class="contribution">
+              {#if section.error}<p class="state error" role="alert">{section.label} · {section.error}</p>
+              {:else}<SystemSurface surface={section.surface} state={section.state} actionUrl={`/${section.packageName}/system/action?tab=${encodeURIComponent(section.id)}`} />{/if}
+            </section>
+          {/each}
         {:else}
           <iframe title={current.label} src={`/view/${current.packageName}/${current.view}`}></iframe>
         {/if}
@@ -147,6 +174,7 @@
 </main>
 
 <style>
+  .contribution { margin-top: 1.25rem; }
   .settings { --tk-bg:#111111;--tk-surface:#181818;--tk-surface-2:#1f1f1f;--tk-border:rgba(255,255,255,.09);--tk-border-hi:rgba(255,255,255,.16);--tk-text:#f5f5f5;--tk-muted:#888888;--tk-accent:#f5f5f5;--tk-on-accent:#111111;--tk-radius-md:8px; min-height:100dvh;background:var(--tk-bg);color:var(--tk-text);font-family:'Ubuntu',system-ui,sans-serif;padding:32px; }
   .settings[data-theme='light'] { --tk-bg:#ffffff;--tk-surface:#f5f5f5;--tk-surface-2:#ececec;--tk-border:rgba(0,0,0,.10);--tk-border-hi:rgba(0,0,0,.18);--tk-text:#1a1a1a;--tk-muted:#666666;--tk-accent:#111111;--tk-on-accent:#ffffff; }
   p { margin:0; }
